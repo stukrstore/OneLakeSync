@@ -75,15 +75,15 @@ hadoop classpath | tr ':' '\n' | grep -Ei 'azure|datalake'
   </property>
   <property>
     <name>fs.azure.account.oauth2.client.endpoint</name>
-    <value>https://login.microsoftonline.com/&lt;TENANT_ID&gt;/oauth2/token</value>
+    <value>https://login.microsoftonline.com/<TENANT_ID>/oauth2/token</value>
   </property>
   <property>
     <name>fs.azure.account.oauth2.client.id</name>
-    <value>&lt;APP_CLIENT_ID&gt;</value>
+    <value><APP_CLIENT_ID></value>
   </property>
   <property>
     <name>fs.azure.account.oauth2.client.secret</name>
-    <value>&lt;APP_CLIENT_SECRET&gt;</value>
+    <value><APP_CLIENT_SECRET></value>
   </property>
 
   <!-- ABFS 권장 옵션 -->
@@ -118,15 +118,15 @@ hadoop classpath | tr ':' '\n' | grep -Ei 'azure|datalake'
 </property>
 <property>
   <name>fs.azure.account.oauth2.client.endpoint.onelake.dfs.fabric.microsoft.com</name>
-  <value>https://login.microsoftonline.com/&lt;TENANT_ID&gt;/oauth2/token</value>
+  <value>https://login.microsoftonline.com/<TENANT_ID>/oauth2/token</value>
 </property>
 <property>
   <name>fs.azure.account.oauth2.client.id.onelake.dfs.fabric.microsoft.com</name>
-  <value>&lt;APP_CLIENT_ID&gt;</value>
+  <value><APP_CLIENT_ID></value>
 </property>
 <property>
   <name>fs.azure.account.oauth2.client.secret.onelake.dfs.fabric.microsoft.com</name>
-  <value>&lt;APP_CLIENT_SECRET&gt;</value>
+  <value><APP_CLIENT_SECRET></value>
 </property>
 ```
 
