@@ -68,7 +68,7 @@ SP_OBJECT_ID   = $SP_OBJECT_ID
 EOF
 ```
 
-> `--skip-assignment` 로 일단 만들고, 권한은 ADLS Gen2 / Fabric workspace 단위로 따로 부여합니다 (본 가이드 **7-3** 참고).
+> `--skip-assignment` 로 일단 만들고, 권한은 ADLS Gen2 / Fabric workspace 단위로 따로 부여합니다 (본 가이드 **8-3** 참고).
 
 ### 1-3. 기존 앱에서 값만 다시 확인하기
 
@@ -275,9 +275,59 @@ chmod 640 /etc/hadoop/conf/azure.jceks
 
 ---
 
-## 6. Sample Hadoop Commands
+## 6. 업로드 흐름 (Hadoop → OneLake)
 
-### 6-1. 디렉터리 조회
+아래는 on-prem Hadoop 클라이언트가 ABFS 드라이버로 OneLake (또는 ADLS Gen2) 에 파일을 업로드할 때의 호출 흐름입니다.
+
+```mermaid
+flowchart LR
+    subgraph OnPrem["On-Prem Hadoop Cluster"]
+        U["User / Job<br/>(hadoop fs -put, distcp)"]
+        FS["Hadoop FileSystem API"]
+        ABFS["ABFS Driver<br/>(hadoop-azure)"]
+        JCEKS[("core-site.xml<br/>+ azure.jceks<br/>(client id / secret)")]
+    end
+
+    subgraph Entra["Microsoft Entra ID"]
+        AAD["OAuth2 Token Endpoint<br/>login.microsoftonline.com/&lt;TENANT&gt;/oauth2/token"]
+    end
+
+    subgraph Azure["Azure / Fabric"]
+        ONELAKE["OneLake DFS Endpoint<br/>&lt;workspace&gt;@onelake.dfs.fabric.microsoft.com"]
+        LH[("Lakehouse<br/>Files / Tables")]
+        RBAC["Workspace RBAC<br/>(Contributor 이상)"]
+    end
+
+    U -->|"abfss:// URI"| FS
+    FS --> ABFS
+    JCEKS -. credentials .-> ABFS
+
+    ABFS -->|"1. client_credentials grant"| AAD
+    AAD -->|"2. access_token<br/>(audience: storage.azure.com)"| ABFS
+
+    ABFS -->|"3. HTTPS PUT / Append / Flush<br/>+ Bearer token"| ONELAKE
+    RBAC -. authorize .-> ONELAKE
+    ONELAKE --> LH
+
+    LH -->|"4. 200 OK / ETag"| ABFS
+    ABFS --> FS
+    FS --> U
+```
+
+| 단계 | 설명 |
+| --- | --- |
+| 1 | ABFS 드라이버가 `core-site.xml` 의 client id/secret 으로 Entra ID 에 토큰 요청 (`grant_type=client_credentials`) |
+| 2 | Entra ID 가 `storage.azure.com` audience 의 access token 발급 (기본 60분 유효, 만료 전 자동 갱신) |
+| 3 | ABFS 가 OneLake DFS REST 엔드포인트에 PUT/Append/Flush 호출 + `Authorization: Bearer <token>` |
+| 4 | OneLake 가 workspace RBAC 검증 후 Lakehouse Files 에 데이터 기록 → ETag 응답 |
+
+> 인증/인가가 분리되어 있어, 토큰 발급은 성공해도(1·2 단계 OK) workspace RBAC 가 없으면 3단계에서 **403 AuthorizationPermissionMismatch** 가 발생합니다. **8-3** 의 권한 부여 절차를 반드시 함께 수행하세요.
+
+---
+
+## 7. Sample Hadoop Commands
+
+### 7-1. 디렉터리 조회
 
 ```bash
 # OneLake Files 영역 조회
@@ -290,7 +340,7 @@ hadoop fs -ls -R -h abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com
 hadoop fs -du -s -h abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/
 ```
 
-### 6-2. 디렉터리 생성 / 삭제
+### 7-2. 디렉터리 생성 / 삭제
 
 ```bash
 hadoop fs -mkdir -p abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/2026/05/
@@ -299,11 +349,11 @@ hadoop fs -mkdir -p abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com
 hadoop fs -rm -r -skipTrash abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/old/
 ```
 
-### 6-3. 단일 파일 업로드 / 다운로드
+### 7-3. 단일 파일 업로드 / 다운로드
 
 ```bash
 # put: 로컬 → OneLake
-hadoop fs -put -f ./enu_sql_server_2022_developer_edition_x64_dvd_7cacf733.iso \
+hadoop fs -put -f ./sample_file.parquet \
   abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/
 
 # copyFromLocal / copyToLocal
@@ -319,7 +369,7 @@ hadoop fs -checksum abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com
 md5sum ./report.csv
 ```
 
-### 6-4. DistCp — 대용량 / 디렉터리 전체 동기화
+### 7-4. DistCp — 대용량 / 디렉터리 전체 동기화
 
 기본 사용:
 
@@ -345,18 +395,18 @@ hadoop distcp \
 | `-i` | I/O 오류 무시하고 계속 |
 | `-log <path>` | distcp 자체 로그 위치 |
 
-### 6-5. DistCp — 로컬 → OneLake 직접 전송
+### 7-5. DistCp — 로컬 → OneLake 직접 전송
 
 `hdfs://` 가 아닌 로컬 파일도 `file://` 스킴으로 distcp 사용 가능합니다.
 
 ```bash
 hadoop distcp \
   -m 8 \
-  file:///data/iso/enu_sql_server_2022_developer_edition_x64_dvd_7cacf733.iso \
+  file:///data/iso/sample_file.parquet \
   abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/
 ```
 
-### 6-6. DistCp — 명령행에서 OAuth 자격증명 주입 (config 파일 없이)
+### 7-6. DistCp — 명령행에서 OAuth 자격증명 주입 (config 파일 없이)
 
 ```bash
 hadoop distcp \
@@ -371,7 +421,7 @@ hadoop distcp \
   abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/Upload/
 ```
 
-### 6-7. DistCp — 클라우드 ↔ 클라우드 (ADLS Gen2 → OneLake)
+### 7-7. DistCp — 클라우드 ↔ 클라우드 (ADLS Gen2 → OneLake)
 
 ```bash
 hadoop distcp \
@@ -383,7 +433,7 @@ hadoop distcp \
 
 > 같은 SP 가 두 계정 모두에 접근 가능하면 위 한 줄이면 충분합니다. 계정별로 다른 SP 가 필요하면 **4-2** 의 account-scoped 설정을 사용하세요.
 
-### 6-8. DistCp — Snapshot / 증분 전송 (HDFS 소스)
+### 7-8. DistCp — Snapshot / 증분 전송 (HDFS 소스)
 
 ```bash
 # 1) 스냅샷 디렉토리 활성화 (HDFS admin)
@@ -406,9 +456,9 @@ hadoop distcp \
 
 ---
 
-## 7. 동작 확인 / 트러블슈팅
+## 8. 동작 확인 / 트러블슈팅
 
-### 7-1. 토큰 발급 검증
+### 8-1. 토큰 발급 검증
 
 ```bash
 hadoop fs -ls abfss://__WS_FabricWorkshop@onelake.dfs.fabric.microsoft.com/Workshop_Lakehouse_Silver.Lakehouse/Files/ 2>&1 | tee /tmp/abfs.log
@@ -422,7 +472,7 @@ export HADOOP_OPTS="$HADOOP_OPTS -Dorg.apache.hadoop.fs.azurebfs=DEBUG"
 hadoop fs -ls abfss://...
 ```
 
-### 7-2. 자주 보는 오류
+### 8-2. 자주 보는 오류
 
 | 메시지 | 원인 | 조치 |
 | --- | --- | --- |
@@ -432,7 +482,7 @@ hadoop fs -ls abfss://...
 | `No FileSystem for scheme: abfss` | hadoop-azure jar 미로딩 | `hadoop classpath` 확인, `HADOOP_OPTIONAL_TOOLS` 등록 여부 확인 |
 | `SSLHandshakeException` | 사내 프록시/인증서 | `-Dhttps.proxyHost`/`-Dhttps.proxyPort` 또는 `fs.azure.ssl.channel.mode=Default` 로 변경 |
 
-### 7-3. 권한 부여 예시
+### 8-3. 권한 부여 예시
 
 ```bash
 # OneLake (Fabric) — workspace 단위 (Fabric REST 또는 UI 로 부여)
@@ -447,7 +497,7 @@ az role assignment create \
 
 ---
 
-## 8. 운영 체크리스트
+## 9. 운영 체크리스트
 
 - [ ] `HADOOP_OPTIONAL_TOOLS` 에 `hadoop-azure,hadoop-azure-datalake` 포함
 - [ ] `core-site.xml` 에 OAuth 4종 (`auth.type`, `provider.type`, `client.endpoint`, `client.id`) + secret(jceks) 설정
